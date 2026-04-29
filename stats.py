@@ -80,6 +80,9 @@ def blank_and_exit(oled, *_):
     sys.exit(0)
 
 
+DISK_CYCLE_SECS = 5
+
+
 def main():
     i2c  = busio.I2C(board.SCL, board.SDA)
     oled = adafruit_ssd1306.SSD1306_I2C(DISPLAY_WIDTH, DISPLAY_HEIGHT, i2c, addr=I2C_ADDR)
@@ -91,6 +94,10 @@ def main():
     image = Image.new("1", (DISPLAY_WIDTH, DISPLAY_HEIGHT))
     draw  = ImageDraw.Draw(image)
 
+    all_disks = [("BOOT" if EXTRA_DISKS else "DSK", "/")] + \
+                [(f"D{i}", m) for i, m in enumerate(EXTRA_DISKS, 1)]
+
+    iteration = 0
     while True:
         draw.rectangle((0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT), outline=0, fill=0)
         y = 0
@@ -108,16 +115,12 @@ def main():
         draw.text((0, y), f"MEM: {get_ram()}", font=font, fill=255)
         y += 10
 
-        boot_label = "BOOT" if EXTRA_DISKS else "DSK"
-        draw.text((0, y), f"{boot_label}: {get_disk('/')}", font=font, fill=255)
-        y += 10
-
-        for i, mount in enumerate(EXTRA_DISKS, 1):
-            draw.text((0, y), f"D{i}: {get_disk(mount)}", font=font, fill=255)
-            y += 10
+        label, mount = all_disks[(iteration // DISK_CYCLE_SECS) % len(all_disks)]
+        draw.text((0, y), f"{label}: {get_disk(mount)}", font=font, fill=255)
 
         oled.image(image)
         oled.show()
+        iteration += 1
         time.sleep(1)
 
 
