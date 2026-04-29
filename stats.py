@@ -8,17 +8,23 @@ import busio
 from PIL import Image, ImageDraw, ImageFont
 import adafruit_ssd1306
 
-LABEL          = "__LABEL__"
 I2C_ADDR       = __ADDR__
 DISPLAY_WIDTH  = __WIDTH__
 DISPLAY_HEIGHT = __HEIGHT__
-SHOW_IP        = __SHOW_IP__
 SHOW_TEMP      = __SHOW_TEMP__
-SHOW_UPTIME    = __SHOW_UPTIME__
+EXTRA_DISKS    = [d.strip() for d in "__EXTRA_DISKS__".split(',') if d.strip()]
 
 
 def run(cmd):
     return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
+
+
+def fmt_bytes(n):
+    if n >= 1 << 40:
+        return f"{n / (1 << 40):.1f}T"
+    if n >= 1 << 30:
+        return f"{n / (1 << 30):.1f}G"
+    return f"{n / (1 << 20):.0f}M"
 
 
 def get_ip():
@@ -30,7 +36,8 @@ def get_ip():
 
 def get_cpu():
     try:
-        return run("top -bn1 | grep 'Cpu(s)' | awk '{printf \"%.1f\", 100 - $(NF-3)}'")
+        # $8 is the idle% field in procps-ng top on Bookworm
+        return run("top -bn1 | grep '%Cpu' | awk '{printf \"%.1f\", 100 - $8}'")
     except Exception:
         return "?"
 
@@ -51,21 +58,18 @@ def get_temp():
 
 def get_ram():
     try:
-        return run("free -m | awk '/Mem:/{printf \"%.0f%%\", $3/$2*100}'")
+        out = run("free -b | awk '/Mem:/{print $3, $2}'")
+        used, total = map(int, out.split())
+        return f"{fmt_bytes(used)}/{fmt_bytes(total)}"
     except Exception:
         return "?"
 
 
-def get_disk():
+def get_disk(mount):
     try:
-        return run("df -h / | awk 'NR==2{print $3\"/\"$2\" \"$5}'")
-    except Exception:
-        return "?"
-
-
-def get_uptime():
-    try:
-        return run("uptime -p | sed 's/up //'")
+        out = run(f"df -B1 {mount} | awk 'NR==2{{print $3, $2}}'")
+        used, total = map(int, out.split())
+        return f"{fmt_bytes(used)}/{fmt_bytes(total)}"
     except Exception:
         return "?"
 
@@ -91,12 +95,8 @@ def main():
         draw.rectangle((0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT), outline=0, fill=0)
         y = 0
 
-        draw.text((0, y), f"[ {LABEL} ]", font=font, fill=255)
+        draw.text((0, y), f"IP: {get_ip()}", font=font, fill=255)
         y += 10
-
-        if SHOW_IP:
-            draw.text((0, y), f"IP: {get_ip()}", font=font, fill=255)
-            y += 10
 
         cpu = get_cpu()
         if SHOW_TEMP:
@@ -105,13 +105,16 @@ def main():
             draw.text((0, y), f"CPU: {cpu}%", font=font, fill=255)
         y += 10
 
-        draw.text((0, y), f"RAM: {get_ram()}", font=font, fill=255)
-        y += 10
-        draw.text((0, y), f"DSK: {get_disk()}", font=font, fill=255)
+        draw.text((0, y), f"MEM: {get_ram()}", font=font, fill=255)
         y += 10
 
-        if SHOW_UPTIME:
-            draw.text((0, y), f"Up:  {get_uptime()}", font=font, fill=255)
+        boot_label = "BOOT" if EXTRA_DISKS else "DSK"
+        draw.text((0, y), f"{boot_label}: {get_disk('/')}", font=font, fill=255)
+        y += 10
+
+        for i, mount in enumerate(EXTRA_DISKS, 1):
+            draw.text((0, y), f"D{i}: {get_disk(mount)}", font=font, fill=255)
+            y += 10
 
         oled.image(image)
         oled.show()

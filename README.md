@@ -36,64 +36,68 @@ The display starts immediately. If it stays blank, reboot once — the I2C devic
 sudo reboot
 ```
 
+## Default display
+
+```
+IP: 192.168.1.42
+CPU: 1.3%  45.1'C
+MEM: 1.7G/7.7G
+DSK: 4.0G/29.0G
+```
+
+4 lines. Always on. `SHOW_TEMP=False` removes the temperature from line 2 but keeps 4 lines:
+
+```
+IP: 192.168.1.42
+CPU: 1.3%
+MEM: 1.7G/7.7G
+DSK: 4.0G/29.0G
+```
+
 ## Customise at install time
 
 Pass environment variables before `bash`. All are optional — defaults work out of the box.
 
+Single variable:
 ```bash
-curl -sSL .../install.sh | sudo OLED_LABEL="OssyPi" bash
+curl -sSL .../install.sh | sudo SHOW_TEMP=False bash
 ```
 
-Multiple at once:
-
+Multiple:
 ```bash
-curl -sSL .../install.sh | sudo OLED_LABEL="OssyPi" OFF_TIME="23:00" ON_TIME="08:00" bash
+curl -sSL .../install.sh | sudo SHOW_TEMP=False OFF_TIME="23:00" ON_TIME="08:00" bash
 ```
 
-| Variable        | Default  | Description                                     |
-|-----------------|----------|-------------------------------------------------|
-| `OLED_LABEL`    | `MyPi`   | Header text shown on line 1                     |
-| `OLED_I2C_ADDR` | `0x3C`   | I2C hex address (`0x3C` or `0x3D` depending on board) |
-| `OLED_WIDTH`    | `128`    | Display width in pixels                         |
-| `OLED_HEIGHT`   | `64`     | Display height in pixels                        |
-| `SHOW_IP`       | `True`   | Show IP address line (`True` or `False`)        |
-| `SHOW_TEMP`     | `True`   | Show CPU temp next to CPU % (`True` or `False`) |
-| `SHOW_UPTIME`   | `True`   | Show uptime on last line (`True` or `False`)    |
-| `OFF_TIME`      | `22:00`  | Scheduled off time, 24h `HH:MM`                |
-| `ON_TIME`       | `07:15`  | Scheduled on time, 24h `HH:MM`                 |
+With extra drives (e.g. Pimoroni NVMe Base Duo, drives mounted at `/mnt/d1` and `/mnt/d2`):
+```bash
+curl -sSL .../install.sh | sudo EXTRA_DISKS="/mnt/d1,/mnt/d2" bash
+```
+
+That gives a 6-line layout:
+```
+IP: 192.168.1.42
+CPU: 1.3%  45.1'C
+MEM: 1.7G/7.7G
+BOOT: 4.0G/29.0G
+D1: 0.4T/1.8T
+D2: 0.8T/1.8T
+```
+
+Sizes are shown in G or T automatically (binary GiB/TiB). Boot disk uses `DSK:` label when no extra disks are configured, `BOOT:` when they are.
+
+## Environment variables
+
+| Variable        | Default  | Description                                             |
+|-----------------|----------|---------------------------------------------------------|
+| `SHOW_TEMP`     | `True`   | Show CPU temp next to CPU% on line 2 (`True` or `False`) |
+| `EXTRA_DISKS`   | _(none)_ | Comma-separated mount points for extra drives           |
+| `OLED_I2C_ADDR` | `0x3C`   | I2C hex address (`0x3C` or `0x3D` depending on board)  |
+| `OLED_WIDTH`    | `128`    | Display width in pixels                                 |
+| `OLED_HEIGHT`   | `64`     | Display height in pixels                                |
+| `OFF_TIME`      | `22:00`  | Scheduled off time, 24h `HH:MM`                        |
+| `ON_TIME`       | `07:15`  | Scheduled on time, 24h `HH:MM`                         |
 
 > Booleans must be capitalized: `True` / `False`.
-
-## Default display layout
-
-```
-[ MyPi ]
-IP: 192.168.1.42
-CPU: 1.3%  45.1'C
-RAM: 34%
-DSK: 4.2G/29G 14%
-Up:  2 hours, 5 min
-```
-
-With `SHOW_IP=False SHOW_UPTIME=False`:
-
-```
-[ MyPi ]
-CPU: 1.3%  45.1'C
-RAM: 34%
-DSK: 4.2G/29G 14%
-```
-
-With `SHOW_TEMP=False`:
-
-```
-[ MyPi ]
-IP: 192.168.1.42
-CPU: 1.3%
-RAM: 34%
-DSK: 4.2G/29G 14%
-Up:  2 hours, 5 min
-```
 
 ## `oled` command
 
@@ -114,7 +118,7 @@ nano ~/oled-stats/stats.py
 oled restart
 ```
 
-Changes are live within seconds of restart.
+Changes are live within seconds of restart. The `EXTRA_DISKS` list and `SHOW_TEMP` flag are plain Python variables at the top of the file — easy to change without reinstalling.
 
 ## Troubleshooting
 
@@ -148,6 +152,10 @@ curl -sSL .../install.sh | sudo OLED_I2C_ADDR="0x3D" bash
 ```
 
 Or edit `~/oled-stats/stats.py`, change `I2C_ADDR = 0x3C` to `0x3D`, then `oled restart`.
+
+**CPU reads 100%**
+
+On non-Bookworm systems, `top`'s output format may differ. Edit `stats.py` and change the `get_cpu()` shell command. The field `$8` (idle%) is correct for procps-ng 4.x (Bookworm default).
 
 ## What gets installed
 
