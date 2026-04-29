@@ -1,0 +1,32 @@
+#!/bin/bash
+ACTION="${1:-toggle}"
+
+case "$ACTION" in
+  on)
+    sudo systemctl start oled-stats
+    ;;
+  off)
+    sudo systemctl stop oled-stats
+    ;;
+  restart)
+    sudo systemctl restart oled-stats
+    ;;
+  status)
+    if systemctl is-active --quiet oled-stats; then
+      echo "OLED ▶ ON"
+    else
+      echo "OLED ■ OFF"
+    fi
+    ;;
+  toggle)
+    if systemctl is-active --quiet oled-stats; then
+      sudo systemctl stop oled-stats
+    else
+      sudo systemctl start oled-stats
+    fi
+    ;;
+  *)
+    echo "Usage: oled [on|off|restart|status]"
+    exit 1
+    ;;
+esac
