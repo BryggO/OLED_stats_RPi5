@@ -100,7 +100,7 @@ def main():
 
         cpu = get_cpu()
         if SHOW_TEMP:
-            draw.text((0, y), f"CPU:{cpu}%  {get_temp()}", font=font, fill=255)
+            draw.text((0, y), f"CPU: {cpu}%  {get_temp()}", font=font, fill=255)
         else:
             draw.text((0, y), f"CPU: {cpu}%", font=font, fill=255)
         y += 10
