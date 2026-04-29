@@ -2,6 +2,9 @@
 
 OLED stats display for Raspberry Pi 5. One command installs everything.
 
+> Based on [mklements/OLED_Stats](https://github.com/mklements/OLED_Stats).
+> Written with [Claude Code](https://claude.ai/code).
+
 ## Hardware
 
 SSD1306-based 128×64 I2C OLED. Wire to GPIO header before running the installer:
@@ -59,7 +62,9 @@ When it finishes you will see:
 ==> pi-oled-stats installed!
     Verify I2C:  sudo i2cdetect -y 1  (look for 3c or 3d)
     Control:     oled on / oled off / oled status
-    Edit:        /home/<user>/oled-stats/stats.py  then  oled restart
+    Refresh:     oled updater <1-60>
+    Disk:        oled disk [stable|rotate|speed <n>|<0-N>]
+    Schedule:    oled sleep <HHMM> / oled awake <HHMM>
 ```
 
 The display starts immediately. If it stays blank, reboot once — the I2C device tree overlay occasionally needs a full boot cycle to activate:
@@ -81,14 +86,16 @@ Always 4 lines. `SHOW_TEMP=False` removes the temperature from line 2 but line c
 
 ## Extra drives — disk cycling
 
-When extra drives are configured, line 4 cycles through all drives (5 seconds each):
+When extra drives are configured, line 4 cycles through all drives (10 seconds each by default):
 
 ```
-second 0–4:   BOOT: 4.0G/29.0G
-second 5–9:   NVMe0: 0.1T/1.8T
-second 10–14: NVMe1: 0.1T/1.8T
-second 15–19: BOOT: 4.0G/29.0G  ← loops
+second 0–9:   BOOT: 4.0G/29.0G
+second 10–19: NVMe0: 0.1T/1.8T
+second 20–29: NVMe1: 0.1T/1.8T
+second 30–39: BOOT: 4.0G/29.0G  ← loops
 ```
+
+Use `oled disk` commands to control cycling at any time without reinstalling (see [`oled` command](#oled-command)).
 
 To find your mount points:
 
@@ -131,15 +138,49 @@ curl -sSL .../install.sh | sudo \
 
 ## `oled` command
 
-Available immediately after install, no `sudo` needed:
+Available immediately after install, no `sudo` needed. Run `oled help` to see all commands.
+
+### Power
 
 | Command        | Action                              |
 |----------------|-------------------------------------|
 | `oled`         | Toggle (on if off, off if on)       |
 | `oled on`      | Start the display service           |
 | `oled off`     | Stop the display (blanks screen)    |
-| `oled restart` | Restart — picks up stats.py changes |
+| `oled restart` | Restart the service                 |
 | `oled status`  | Print `OLED ▶ ON` or `OLED ■ OFF`  |
+
+### Refresh rate
+
+| Command           | Action                                        |
+|-------------------|-----------------------------------------------|
+| `oled updater 2`  | Update display every 2 seconds (default)      |
+| `oled updater 5`  | Update display every 5 seconds                |
+
+Valid range: 1–60 seconds. Persists across reboots.
+
+### Disk display
+
+Disk 0 is always the root (boot) disk. Disk 1, 2, … are the extra drives you configured at install time.
+
+| Command              | Action                                              |
+|----------------------|-----------------------------------------------------|
+| `oled disk rotate`   | Auto-cycle through all disks (default)              |
+| `oled disk stable`   | Lock to root disk only                              |
+| `oled disk 0`        | Lock to root disk (same as `stable`)                |
+| `oled disk 1`        | Lock to first extra disk                            |
+| `oled disk speed 10` | Cycle disks every 10 seconds (default, range 1–120) |
+
+### Schedule
+
+Times are in 24h `HHMM` format (no colon).
+
+| Command             | Action                          |
+|---------------------|---------------------------------|
+| `oled sleep 2200`   | Turn off display at 22:00       |
+| `oled awake 0715`   | Turn on display at 07:15        |
+
+Changes take effect immediately in cron — no restart needed. Settings persist across reboots.
 
 ## Editing the display
 
@@ -148,9 +189,7 @@ nano ~/oled-stats/stats.py
 oled restart
 ```
 
-Changes are live within seconds of restart. `EXTRA_DISKS`, `DISK_LABELS`, `DISK_UNIT`, `SHOW_TEMP`, and `DISK_CYCLE_SECS` are plain Python variables at the top of the file — easy to tweak without reinstalling.
-
-**Disk label limit:** PIL's default font is 6px wide. At 128px display width, each line fits ~21 characters. With the `LABEL: ` prefix, keep labels to 8 characters or fewer to avoid truncation.
+`EXTRA_DISKS`, `DISK_LABELS`, `DISK_UNIT`, `SHOW_TEMP`, `REFRESH_SECS`, and `DISK_CYCLE_SECS` are plain Python variables at the top of the file. Runtime overrides (set via `oled updater` / `oled disk`) are stored in `~/oled-stats/config.json`.
 
 ## Troubleshooting
 
@@ -179,17 +218,16 @@ journalctl -u oled-stats -n 50
 
 If `i2cdetect` shows `3d` instead of `3c`, edit `~/oled-stats/stats.py`, change `I2C_ADDR = 0x3C` to `0x3D`, then `oled restart`.
 
-**CPU reads 100%**
-
-On non-Bookworm systems, `top`'s output format may differ. Edit `get_cpu()` in `stats.py` — `$8` is the idle% field for procps-ng 4.x (Bookworm default).
-
 ## What gets installed
 
 | Path | Purpose |
 |------|---------|
-| `~/stats_env/` | Python venv (Adafruit libraries) |
+| `~/stats_env/` | Python venv (smbus2, Pillow) |
 | `~/oled-stats/stats.py` | Display script — edit to customise |
-| `/usr/local/bin/oled` | Toggle command |
+| `~/oled-stats/PixelOperator.ttf` | Pixel font for the display |
+| `~/oled-stats/config.json` | Runtime settings (refresh rate, disk mode, schedule) |
+| `/usr/local/bin/oled` | Control command |
+| `/usr/local/sbin/oled-set-cron` | Schedule update helper (root) |
 | `/etc/systemd/system/oled-stats.service` | Auto-start on boot |
-| `/etc/sudoers.d/oled-stats` | Passwordless `oled on/off/restart` |
+| `/etc/sudoers.d/oled-stats` | Passwordless `oled` commands |
 | `/etc/cron.d/oled-stats` | Scheduled on/off |
