@@ -5,6 +5,8 @@ OLED stats display for Raspberry Pi 5. One command installs everything.
 > Based on [mklements/OLED_Stats](https://github.com/mklements/OLED_Stats).
 > Written with [Claude Code](https://claude.ai/code).
 
+> Hosted locally, send me an email for any issues / requests
+
 ## Hardware
 
 SSD1306-based 128×64 I2C OLED. Wire to GPIO header before running the installer:
