@@ -16,6 +16,7 @@ REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 VENV_DIR="${REAL_HOME}/stats_env"
 INSTALL_DIR="${REAL_HOME}/oled-stats"
 SYSTEMCTL="$(command -v systemctl)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "==> OLED stats installer — running for user: ${REAL_USER}"
 
@@ -111,156 +112,16 @@ else
 fi
 apt-get install -y i2c-tools
 
-# 5. Adafruit Blinka
-sudo -u "$REAL_USER" "$VENV_DIR/bin/pip3" install --upgrade adafruit-blinka
+# 5. smbus2 for I2C (no lgpio/adafruit-blinka needed)
+sudo -u "$REAL_USER" "$VENV_DIR/bin/pip3" install smbus2
 
-# 6. SSD1306 library
-sudo -u "$REAL_USER" "$VENV_DIR/bin/pip3" install adafruit-circuitpython-ssd1306
-
-# 7. PIL
+# 6. PIL
 apt-get install -y python3-pil
 
-# 8. Write stats.py
+# 7. Copy stats.py and font from repo, then substitute config values
 mkdir -p "$INSTALL_DIR"
-cat << 'PYEOF' > "$INSTALL_DIR/stats.py"
-import time
-import signal
-import sys
-import subprocess
-
-import board
-import busio
-from PIL import Image, ImageDraw, ImageFont
-import adafruit_ssd1306
-
-I2C_ADDR       = __ADDR__
-DISPLAY_WIDTH  = __WIDTH__
-DISPLAY_HEIGHT = __HEIGHT__
-SHOW_TEMP      = __SHOW_TEMP__
-EXTRA_DISKS    = [d.strip() for d in "__EXTRA_DISKS__".split(',') if d.strip()]
-DISK_LABELS    = [l.strip() for l in "__DISK_LABELS__".split(',') if l.strip()]
-DISK_UNIT      = "__DISK_UNIT__"
-
-DISK_CYCLE_SECS = 5
-
-
-def run(cmd):
-    return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
-
-
-def fmt_bytes(n, unit=None):
-    if unit == "T":
-        return f"{n / (1 << 40):.1f}T"
-    if unit == "G":
-        return f"{n / (1 << 30):.1f}G"
-    if n >= 1 << 40:
-        return f"{n / (1 << 40):.1f}T"
-    if n >= 1 << 30:
-        return f"{n / (1 << 30):.1f}G"
-    return f"{n / (1 << 20):.0f}M"
-
-
-def get_ip():
-    try:
-        return run("hostname -I | awk '{print $1}'")
-    except Exception:
-        return "N/A"
-
-
-def get_cpu():
-    try:
-        return run("top -bn1 | grep '%Cpu' | awk '{printf \"%.1f\", 100 - $8}'")
-    except Exception:
-        return "?"
-
-
-def get_temp():
-    try:
-        raw = run("vcgencmd measure_temp 2>/dev/null | cut -d= -f2")
-        if raw:
-            return raw
-    except Exception:
-        pass
-    try:
-        millideg = int(run("cat /sys/class/thermal/thermal_zone0/temp"))
-        return f"{millideg / 1000:.1f}'C"
-    except Exception:
-        return "?"
-
-
-def get_ram():
-    try:
-        out = run("free -b | awk '/Mem:/{print $3, $2}'")
-        used, total = map(int, out.split())
-        return f"{fmt_bytes(used)}/{fmt_bytes(total)}"
-    except Exception:
-        return "?"
-
-
-def get_disk(mount):
-    try:
-        out = run(f"df -B1 {mount} | awk 'NR==2{{print $3, $2}}'")
-        used, total = map(int, out.split())
-        unit = None if DISK_UNIT == "auto" else DISK_UNIT
-        return f"{fmt_bytes(used, unit)}/{fmt_bytes(total, unit)}"
-    except Exception:
-        return "?"
-
-
-def blank_and_exit(oled, *_):
-    oled.fill(0)
-    oled.show()
-    sys.exit(0)
-
-
-def main():
-    i2c  = busio.I2C(board.SCL, board.SDA)
-    oled = adafruit_ssd1306.SSD1306_I2C(DISPLAY_WIDTH, DISPLAY_HEIGHT, i2c, addr=I2C_ADDR)
-
-    signal.signal(signal.SIGTERM, lambda *a: blank_and_exit(oled))
-    signal.signal(signal.SIGINT,  lambda *a: blank_and_exit(oled))
-
-    font  = ImageFont.load_default()
-    image = Image.new("1", (DISPLAY_WIDTH, DISPLAY_HEIGHT))
-    draw  = ImageDraw.Draw(image)
-
-    boot_label = "BOOT" if EXTRA_DISKS else "DSK"
-    if DISK_LABELS and len(DISK_LABELS) == len(EXTRA_DISKS):
-        extra = list(zip(DISK_LABELS, EXTRA_DISKS))
-    else:
-        extra = [(f"D{i}", m) for i, m in enumerate(EXTRA_DISKS, 1)]
-    all_disks = [(boot_label, "/")] + extra
-
-    iteration = 0
-    while True:
-        draw.rectangle((0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT), outline=0, fill=0)
-        y = 0
-
-        draw.text((0, y), f"IP: {get_ip()}", font=font, fill=255)
-        y += 10
-
-        cpu = get_cpu()
-        if SHOW_TEMP:
-            draw.text((0, y), f"CPU: {cpu}%  {get_temp()}", font=font, fill=255)
-        else:
-            draw.text((0, y), f"CPU: {cpu}%", font=font, fill=255)
-        y += 10
-
-        draw.text((0, y), f"MEM: {get_ram()}", font=font, fill=255)
-        y += 10
-
-        label, mount = all_disks[(iteration // DISK_CYCLE_SECS) % len(all_disks)]
-        draw.text((0, y), f"{label}: {get_disk(mount)}", font=font, fill=255)
-
-        oled.image(image)
-        oled.show()
-        iteration += 1
-        time.sleep(1)
-
-
-if __name__ == "__main__":
-    main()
-PYEOF
+cp "$SCRIPT_DIR/stats.py" "$INSTALL_DIR/stats.py"
+cp "$SCRIPT_DIR/PixelOperator.ttf" "$INSTALL_DIR/PixelOperator.ttf"
 
 sed -i "s|__ADDR__|${OLED_I2C_ADDR}|g"         "$INSTALL_DIR/stats.py"
 sed -i "s|__WIDTH__|${OLED_WIDTH}|g"            "$INSTALL_DIR/stats.py"
@@ -271,7 +132,31 @@ sed -i "s|__DISK_LABELS__|${DISK_LABELS}|g"     "$INSTALL_DIR/stats.py"
 sed -i "s|__DISK_UNIT__|${DISK_UNIT}|g"         "$INSTALL_DIR/stats.py"
 chown -R "$REAL_USER:$REAL_USER" "$INSTALL_DIR"
 
-# 9. Systemd service
+# 8. Default config.json
+OFF_HHMM="${OFF_TIME/:/}"
+ON_HHMM="${ON_TIME/:/}"
+cat > "$INSTALL_DIR/config.json" << CFGEOF
+{
+  "refresh_secs": 2,
+  "disk_mode": "rotate",
+  "disk_index": 0,
+  "disk_speed": 10,
+  "sleep_time": "${OFF_HHMM}",
+  "awake_time": "${ON_HHMM}"
+}
+CFGEOF
+chown "$REAL_USER:$REAL_USER" "$INSTALL_DIR/config.json"
+
+# 9. cron helper (root-owned, called via sudo)
+cat > /usr/local/sbin/oled-set-cron << 'CRONEOF'
+#!/bin/bash
+OFF="${1}" ON="${2}"
+printf '%s %s * * *  root  /usr/bin/systemctl stop oled-stats\n'  "${OFF:2:2}" "${OFF:0:2}" >  /etc/cron.d/oled-stats
+printf '%s %s * * *  root  /usr/bin/systemctl start oled-stats\n' "${ON:2:2}"  "${ON:0:2}"  >> /etc/cron.d/oled-stats
+CRONEOF
+chmod 755 /usr/local/sbin/oled-set-cron
+
+# 10. Systemd service
 cat > /etc/systemd/system/oled-stats.service << SVCEOF
 [Unit]
 Description=OLED Stats Display
@@ -290,9 +175,38 @@ SVCEOF
 systemctl daemon-reload
 systemctl enable --now oled-stats
 
-# 10. oled command + sudoers
+# 11. oled command
 cat << 'OLEDEOF' > /usr/local/bin/oled
 #!/bin/bash
+CONFIG="__CONFIG_FILE__"
+
+cfg_set() {
+    python3 -c "
+import json, sys
+key, val = sys.argv[1], sys.argv[2]
+try: val = int(val)
+except: pass
+try:
+    cfg = json.load(open('$CONFIG'))
+except:
+    cfg = {}
+cfg[key] = val
+json.dump(cfg, open('$CONFIG', 'w'), indent=2)
+" "$1" "$2"
+}
+
+cfg_get() {
+    python3 -c "
+import json, sys
+key, dflt = sys.argv[1], sys.argv[2]
+try:
+    cfg = json.load(open('$CONFIG'))
+    print(cfg.get(key, dflt))
+except:
+    print(dflt)
+" "$1" "$2"
+}
+
 ACTION="${1:-toggle}"
 
 case "$ACTION" in
@@ -319,32 +233,95 @@ case "$ACTION" in
       sudo systemctl start oled-stats
     fi
     ;;
+  updater)
+    val="${2:-}"
+    if [[ ! "$val" =~ ^[0-9]+$ ]] || (( val < 1 || val > 60 )); then
+      echo "Usage: oled updater <1-60>"; exit 1
+    fi
+    cfg_set refresh_secs "$val"
+    sudo systemctl restart oled-stats
+    echo "Update rate set to ${val}s"
+    ;;
+  disk)
+    sub="${2:-}"
+    case "$sub" in
+      rotate)
+        cfg_set disk_mode rotate
+        sudo systemctl restart oled-stats
+        echo "Disk: auto-rotate"
+        ;;
+      stable)
+        cfg_set disk_mode manual
+        cfg_set disk_index 0
+        sudo systemctl restart oled-stats
+        echo "Disk: locked to root"
+        ;;
+      speed)
+        val="${3:-}"
+        if [[ ! "$val" =~ ^[0-9]+$ ]] || (( val < 1 || val > 120 )); then
+          echo "Usage: oled disk speed <1-120>"; exit 1
+        fi
+        cfg_set disk_speed "$val"
+        sudo systemctl restart oled-stats
+        echo "Disk rotation speed set to ${val}s"
+        ;;
+      ''|*[!0-9]*)
+        echo "Usage: oled disk [stable|rotate|speed <n>|<0-N>]"; exit 1
+        ;;
+      *)
+        cfg_set disk_mode manual
+        cfg_set disk_index "$sub"
+        sudo systemctl restart oled-stats
+        echo "Disk: locked to disk $sub"
+        ;;
+    esac
+    ;;
+  sleep)
+    val="${2:-}"
+    if [[ ! "$val" =~ ^[0-2][0-9][0-5][0-9]$ ]]; then
+      echo "Usage: oled sleep <HHMM>  (e.g. 2200)"; exit 1
+    fi
+    cfg_set sleep_time "$val"
+    on="$(cfg_get awake_time 0715)"
+    sudo /usr/local/sbin/oled-set-cron "$val" "$on"
+    echo "Sleep set to ${val:0:2}:${val:2:2}"
+    ;;
+  awake)
+    val="${2:-}"
+    if [[ ! "$val" =~ ^[0-2][0-9][0-5][0-9]$ ]]; then
+      echo "Usage: oled awake <HHMM>  (e.g. 0600)"; exit 1
+    fi
+    cfg_set awake_time "$val"
+    off="$(cfg_get sleep_time 2200)"
+    sudo /usr/local/sbin/oled-set-cron "$off" "$val"
+    echo "Wake set to ${val:0:2}:${val:2:2}"
+    ;;
   *)
-    echo "Usage: oled [on|off|restart|status]"
+    echo "Usage: oled [on|off|restart|status|toggle]"
+    echo "       oled updater <1-60>"
+    echo "       oled disk [stable|rotate|speed <1-120>|<0-N>]"
+    echo "       oled sleep <HHMM>"
+    echo "       oled awake <HHMM>"
     exit 1
     ;;
 esac
 OLEDEOF
 chmod +x /usr/local/bin/oled
+sed -i "s|__CONFIG_FILE__|${INSTALL_DIR}/config.json|g" /usr/local/bin/oled
 
+# 12. sudoers
 cat > /etc/sudoers.d/oled-stats << SUDOEOF
-${REAL_USER} ALL=(ALL) NOPASSWD: ${SYSTEMCTL} start oled-stats, ${SYSTEMCTL} stop oled-stats, ${SYSTEMCTL} restart oled-stats
+${REAL_USER} ALL=(ALL) NOPASSWD: ${SYSTEMCTL} start oled-stats, ${SYSTEMCTL} stop oled-stats, ${SYSTEMCTL} restart oled-stats, /usr/local/sbin/oled-set-cron
 SUDOEOF
 chmod 440 /etc/sudoers.d/oled-stats
 
-# 11. Cron schedule
-OFF_H="${OFF_TIME%%:*}"
-OFF_M="${OFF_TIME##*:}"
-ON_H="${ON_TIME%%:*}"
-ON_M="${ON_TIME##*:}"
-
-cat > /etc/cron.d/oled-stats << CRONEOF
-${OFF_M} ${OFF_H} * * *  root  ${SYSTEMCTL} stop oled-stats
-${ON_M} ${ON_H} * * *  root  ${SYSTEMCTL} start oled-stats
-CRONEOF
+# 13. Initial cron schedule
+/usr/local/sbin/oled-set-cron "${OFF_HHMM}" "${ON_HHMM}"
 
 echo ""
 echo "==> pi-oled-stats installed!"
 echo "    Verify I2C:  sudo i2cdetect -y 1  (look for 3c or 3d)"
 echo "    Control:     oled on / oled off / oled status"
-echo "    Edit:        ${INSTALL_DIR}/stats.py  then  oled restart"
+echo "    Refresh:     oled updater <1-60>"
+echo "    Disk:        oled disk [stable|rotate|speed <n>|<0-N>]"
+echo "    Schedule:    oled sleep <HHMM> / oled awake <HHMM>"

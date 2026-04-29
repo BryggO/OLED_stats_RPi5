@@ -1,13 +1,13 @@
+import os
+import json
 import time
 import signal
 import sys
 import subprocess
-
-import board
-import busio
+import smbus2
 from PIL import Image, ImageDraw, ImageFont
-import adafruit_ssd1306
 
+I2C_BUS        = 1
 I2C_ADDR       = __ADDR__
 DISPLAY_WIDTH  = __WIDTH__
 DISPLAY_HEIGHT = __HEIGHT__
@@ -16,7 +16,84 @@ EXTRA_DISKS    = [d.strip() for d in "__EXTRA_DISKS__".split(',') if d.strip()]
 DISK_LABELS    = [l.strip() for l in "__DISK_LABELS__".split(',') if l.strip()]
 DISK_UNIT      = "__DISK_UNIT__"
 
-DISK_CYCLE_SECS = 5
+REFRESH_SECS    = 2
+DISK_CYCLE_SECS = 10
+
+FONT_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "PixelOperator.ttf")
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+
+def load_config():
+    defaults = {"refresh_secs": REFRESH_SECS, "disk_mode": "rotate",
+                "disk_index": 0, "disk_speed": DISK_CYCLE_SECS}
+    try:
+        with open(CONFIG_PATH) as f:
+            return {**defaults, **json.load(f)}
+    except Exception:
+        return defaults
+
+
+class SSD1306:
+    def __init__(self, bus_num, addr, width, height):
+        self._bus = smbus2.SMBus(bus_num)
+        self._addr = addr
+        self.width = width
+        self.height = height
+        self._buf = bytearray(width * height // 8)
+        self._init_display()
+
+    def _cmd(self, *cmds):
+        msg = smbus2.i2c_msg.write(self._addr, bytes([0x00]) + bytes(cmds))
+        self._bus.i2c_rdwr(msg)
+
+    def _init_display(self):
+        self._cmd(
+            0xAE,
+            0xD5, 0x80,
+            0xA8, self.height - 1,
+            0xD3, 0x00,
+            0x40,
+            0x8D, 0x14,
+            0x20, 0x00,
+            0xA1,
+            0xC8,
+            0xDA, 0x12,
+            0x81, 0xCF,
+            0xD9, 0xF1,
+            0xDB, 0x40,
+            0xA4,
+            0xA6,
+            0x2E,
+            0xAF,
+        )
+
+    def fill(self, val):
+        fill_byte = 0xFF if val else 0x00
+        self._buf[:] = bytearray([fill_byte] * len(self._buf))
+
+    def image(self, img):
+        img = img.convert("1")
+        buf = self._buf
+        w = self.width
+        for page in range(self.height // 8):
+            base_row = page * 8
+            for col in range(w):
+                byte = 0
+                for bit in range(8):
+                    if img.getpixel((col, base_row + bit)):
+                        byte |= 1 << bit
+                buf[page * w + col] = byte
+
+    def show(self):
+        self._cmd(
+            0x21, 0, self.width - 1,
+            0x22, 0, self.height // 8 - 1,
+        )
+        msg = smbus2.i2c_msg.write(self._addr, bytes([0x40]) + bytes(self._buf))
+        self._bus.i2c_rdwr(msg)
+
+    def close(self):
+        self._bus.close()
 
 
 def run(cmd):
@@ -42,9 +119,26 @@ def get_ip():
         return "N/A"
 
 
+_prev_cpu_times = None
+
 def get_cpu():
+    global _prev_cpu_times
     try:
-        return run("top -bn1 | grep '%Cpu' | awk '{printf \"%.1f\", 100 - $8}'")
+        with open("/proc/stat") as f:
+            fields = f.readline().split()
+        times = [int(x) for x in fields[1:]]
+        idle = times[3]
+        total = sum(times)
+        if _prev_cpu_times is not None:
+            prev_idle, prev_total = _prev_cpu_times
+            idle_delta = idle - prev_idle
+            total_delta = total - prev_total
+            usage = (1.0 - idle_delta / total_delta) * 100 if total_delta else 0.0
+            result = f"{usage:.1f}"
+        else:
+            result = "?"
+        _prev_cpu_times = (idle, total)
+        return result
     except Exception:
         return "?"
 
@@ -85,17 +179,17 @@ def get_disk(mount):
 def blank_and_exit(oled, *_):
     oled.fill(0)
     oled.show()
+    oled.close()
     sys.exit(0)
 
 
 def main():
-    i2c  = busio.I2C(board.SCL, board.SDA)
-    oled = adafruit_ssd1306.SSD1306_I2C(DISPLAY_WIDTH, DISPLAY_HEIGHT, i2c, addr=I2C_ADDR)
+    oled = SSD1306(I2C_BUS, I2C_ADDR, DISPLAY_WIDTH, DISPLAY_HEIGHT)
 
     signal.signal(signal.SIGTERM, lambda *a: blank_and_exit(oled))
     signal.signal(signal.SIGINT,  lambda *a: blank_and_exit(oled))
 
-    font  = ImageFont.load_default()
+    font  = ImageFont.truetype(FONT_PATH, 16)
     image = Image.new("1", (DISPLAY_WIDTH, DISPLAY_HEIGHT))
     draw  = ImageDraw.Draw(image)
 
@@ -106,31 +200,39 @@ def main():
         extra = [(f"D{i}", m) for i, m in enumerate(EXTRA_DISKS, 1)]
     all_disks = [(boot_label, "/")] + extra
 
-    iteration = 0
+    cfg        = load_config()
+    refresh    = max(1, min(60,  int(cfg["refresh_secs"])))
+    disk_mode  = cfg["disk_mode"]
+    disk_index = int(cfg["disk_index"])
+    disk_speed = max(1, min(120, int(cfg["disk_speed"])))
+
     while True:
         draw.rectangle((0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT), outline=0, fill=0)
         y = 0
 
         draw.text((0, y), f"IP: {get_ip()}", font=font, fill=255)
-        y += 10
+        y += 16
 
         cpu = get_cpu()
         if SHOW_TEMP:
             draw.text((0, y), f"CPU: {cpu}%  {get_temp()}", font=font, fill=255)
         else:
             draw.text((0, y), f"CPU: {cpu}%", font=font, fill=255)
-        y += 10
+        y += 16
 
         draw.text((0, y), f"MEM: {get_ram()}", font=font, fill=255)
-        y += 10
+        y += 16
 
-        label, mount = all_disks[(iteration // DISK_CYCLE_SECS) % len(all_disks)]
+        if disk_mode == "rotate":
+            idx = int(time.monotonic() // disk_speed) % len(all_disks)
+        else:
+            idx = min(disk_index, len(all_disks) - 1)
+        label, mount = all_disks[idx]
         draw.text((0, y), f"{label}: {get_disk(mount)}", font=font, fill=255)
 
         oled.image(image)
         oled.show()
-        iteration += 1
-        time.sleep(1)
+        time.sleep(refresh)
 
 
 if __name__ == "__main__":
