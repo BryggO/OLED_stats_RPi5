@@ -6,6 +6,8 @@ OLED_WIDTH="${OLED_WIDTH:-128}"
 OLED_HEIGHT="${OLED_HEIGHT:-64}"
 SHOW_TEMP="${SHOW_TEMP:-True}"
 EXTRA_DISKS="${EXTRA_DISKS:-}"
+DISK_LABELS="${DISK_LABELS:-}"
+DISK_UNIT="${DISK_UNIT:-}"
 OFF_TIME="${OFF_TIME:-22:00}"
 ON_TIME="${ON_TIME:-07:15}"
 
@@ -15,7 +17,77 @@ VENV_DIR="${REAL_HOME}/stats_env"
 INSTALL_DIR="${REAL_HOME}/oled-stats"
 SYSTEMCTL="$(command -v systemctl)"
 
-echo "==> Installing pi-oled-stats for user: ${REAL_USER}"
+echo "==> OLED stats installer — running for user: ${REAL_USER}"
+
+# --- Interactive disk setup (skipped if EXTRA_DISKS already set via env var) ---
+if [ -z "$EXTRA_DISKS" ]; then
+    echo ""
+    echo "==> Detecting mounted drives..."
+    echo ""
+
+    declare -a MOUNTS
+    declare -a DEVNAMES
+    COUNT=0
+    while IFS= read -r line; do
+        dev=$(awk '{print $1}'   <<< "$line")
+        size=$(awk '{print $2}'  <<< "$line")
+        used=$(awk '{print $3}'  <<< "$line")
+        avail=$(awk '{print $4}' <<< "$line")
+        mount=$(awk '{print $6}' <<< "$line")
+        COUNT=$((COUNT+1))
+        MOUNTS[$COUNT]="$mount"
+        DEVNAMES[$COUNT]="$dev"
+        printf "  [%d] %-28s %s  (%s used, %s free)\n" \
+            "$COUNT" "$mount" "$size" "$used" "$avail"
+    done < <(df -h | awk 'NR>1 && $1 ~ /^\/dev\// && $6 != "/" && $6 !~ /^\/boot/')
+
+    if [ "$COUNT" -eq 0 ]; then
+        echo "  (no extra drives detected — only boot disk will be shown)"
+    else
+        echo ""
+        echo "  Boot disk (/) is always shown."
+        echo "  Which extra drives to monitor? Enter numbers separated by commas (e.g. 1,2)"
+        echo "  Leave blank for boot disk only:"
+        printf "  > "
+        read -r SELECTION < /dev/tty
+
+        if [ -n "$SELECTION" ]; then
+            IFS=',' read -ra NUMS <<< "$SELECTION"
+            for num in "${NUMS[@]}"; do
+                num=$(echo "$num" | tr -d ' ')
+                mount="${MOUNTS[$num]}"
+                dev="${DEVNAMES[$num]}"
+                echo ""
+                echo "  Label for '$mount' ($dev)"
+                echo "  Max 8 characters, no commas (e.g. NVMe1, Films, Backup):"
+                printf "  > "
+                read -r label < /dev/tty
+                label="${label//,/}"
+                label="${label:0:8}"
+                EXTRA_DISKS="${EXTRA_DISKS}${mount},"
+                DISK_LABELS="${DISK_LABELS}${label},"
+            done
+            EXTRA_DISKS="${EXTRA_DISKS%,}"
+            DISK_LABELS="${DISK_LABELS%,}"
+        fi
+    fi
+
+    echo ""
+    echo "  Show disk sizes in:"
+    echo "  [1] Auto — G below 1 TiB, T at or above  (default)"
+    echo "  [2] Always GB"
+    echo "  [3] Always TB"
+    printf "  > "
+    read -r UNIT_CHOICE < /dev/tty
+    case "$UNIT_CHOICE" in
+        2) DISK_UNIT="G" ;;
+        3) DISK_UNIT="T" ;;
+        *) DISK_UNIT="auto" ;;
+    esac
+fi
+
+DISK_UNIT="${DISK_UNIT:-auto}"
+echo ""
 
 # 1. System update
 apt-get update
@@ -66,13 +138,21 @@ DISPLAY_WIDTH  = __WIDTH__
 DISPLAY_HEIGHT = __HEIGHT__
 SHOW_TEMP      = __SHOW_TEMP__
 EXTRA_DISKS    = [d.strip() for d in "__EXTRA_DISKS__".split(',') if d.strip()]
+DISK_LABELS    = [l.strip() for l in "__DISK_LABELS__".split(',') if l.strip()]
+DISK_UNIT      = "__DISK_UNIT__"
+
+DISK_CYCLE_SECS = 5
 
 
 def run(cmd):
     return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
 
 
-def fmt_bytes(n):
+def fmt_bytes(n, unit=None):
+    if unit == "T":
+        return f"{n / (1 << 40):.1f}T"
+    if unit == "G":
+        return f"{n / (1 << 30):.1f}G"
     if n >= 1 << 40:
         return f"{n / (1 << 40):.1f}T"
     if n >= 1 << 30:
@@ -89,7 +169,6 @@ def get_ip():
 
 def get_cpu():
     try:
-        # $8 is the idle% field in procps-ng top on Bookworm
         return run("top -bn1 | grep '%Cpu' | awk '{printf \"%.1f\", 100 - $8}'")
     except Exception:
         return "?"
@@ -122,7 +201,8 @@ def get_disk(mount):
     try:
         out = run(f"df -B1 {mount} | awk 'NR==2{{print $3, $2}}'")
         used, total = map(int, out.split())
-        return f"{fmt_bytes(used)}/{fmt_bytes(total)}"
+        unit = None if DISK_UNIT == "auto" else DISK_UNIT
+        return f"{fmt_bytes(used, unit)}/{fmt_bytes(total, unit)}"
     except Exception:
         return "?"
 
@@ -131,9 +211,6 @@ def blank_and_exit(oled, *_):
     oled.fill(0)
     oled.show()
     sys.exit(0)
-
-
-DISK_CYCLE_SECS = 5
 
 
 def main():
@@ -147,8 +224,12 @@ def main():
     image = Image.new("1", (DISPLAY_WIDTH, DISPLAY_HEIGHT))
     draw  = ImageDraw.Draw(image)
 
-    all_disks = [("BOOT" if EXTRA_DISKS else "DSK", "/")] + \
-                [(f"D{i}", m) for i, m in enumerate(EXTRA_DISKS, 1)]
+    boot_label = "BOOT" if EXTRA_DISKS else "DSK"
+    if DISK_LABELS and len(DISK_LABELS) == len(EXTRA_DISKS):
+        extra = list(zip(DISK_LABELS, EXTRA_DISKS))
+    else:
+        extra = [(f"D{i}", m) for i, m in enumerate(EXTRA_DISKS, 1)]
+    all_disks = [(boot_label, "/")] + extra
 
     iteration = 0
     while True:
@@ -186,6 +267,8 @@ sed -i "s|__WIDTH__|${OLED_WIDTH}|g"            "$INSTALL_DIR/stats.py"
 sed -i "s|__HEIGHT__|${OLED_HEIGHT}|g"          "$INSTALL_DIR/stats.py"
 sed -i "s|__SHOW_TEMP__|${SHOW_TEMP}|g"         "$INSTALL_DIR/stats.py"
 sed -i "s|__EXTRA_DISKS__|${EXTRA_DISKS}|g"     "$INSTALL_DIR/stats.py"
+sed -i "s|__DISK_LABELS__|${DISK_LABELS}|g"     "$INSTALL_DIR/stats.py"
+sed -i "s|__DISK_UNIT__|${DISK_UNIT}|g"         "$INSTALL_DIR/stats.py"
 chown -R "$REAL_USER:$REAL_USER" "$INSTALL_DIR"
 
 # 9. Systemd service

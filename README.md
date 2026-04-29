@@ -1,6 +1,6 @@
 # OLED_stats_RPi5
 
-OLED stats display for Raspberry Pi 5. One command installs everything — no interaction required.
+OLED stats display for Raspberry Pi 5. One command installs everything.
 
 ## Hardware
 
@@ -20,6 +20,38 @@ curl -sSL http://<forgejo-host>:3030/HomeLab/OLED_stats_RPi5/raw/branch/main/ins
 ```
 
 **Expect 10–30 minutes.** The script runs `apt-get upgrade` and compiles several Python packages.
+
+### Interactive disk wizard
+
+When no `EXTRA_DISKS` env var is set, the installer detects all mounted drives and lets you pick which to monitor:
+
+```
+==> Detecting mounted drives...
+
+  [1] /mnt/nvme0                    1.9T  (120G used, 1.7T free)
+  [2] /mnt/nvme1                    1.9T  (80G used, 1.8T free)
+
+  Boot disk (/) is always shown.
+  Which extra drives to monitor? Enter numbers separated by commas (e.g. 1,2)
+  Leave blank for boot disk only:
+  > 1,2
+
+  Label for '/mnt/nvme0' (/dev/nvme0n1p1)
+  Max 8 characters, no commas (e.g. NVMe1, Films, Backup):
+  > NVMe0
+
+  Label for '/mnt/nvme1' (/dev/nvme0n1p2)
+  Max 8 characters, no commas (e.g. NVMe1, Films, Backup):
+  > NVMe1
+
+  Show disk sizes in:
+  [1] Auto — G below 1 TiB, T at or above  (default)
+  [2] Always GB
+  [3] Always TB
+  > 3
+```
+
+To skip the wizard, pass env vars directly (see [Customise at install time](#customise-at-install-time)).
 
 When it finishes you will see:
 
@@ -49,12 +81,12 @@ Always 4 lines. `SHOW_TEMP=False` removes the temperature from line 2 but line c
 
 ## Extra drives — disk cycling
 
-When `EXTRA_DISKS` is set, line 4 cycles through all drives (5 seconds each):
+When extra drives are configured, line 4 cycles through all drives (5 seconds each):
 
 ```
 second 0–4:   BOOT: 4.0G/29.0G
-second 5–9:   D1: 0.4T/1.8T
-second 10–14: D2: 0.8T/1.8T
+second 5–9:   NVMe0: 0.1T/1.8T
+second 10–14: NVMe1: 0.1T/1.8T
 second 15–19: BOOT: 4.0G/29.0G  ← loops
 ```
 
@@ -64,39 +96,38 @@ To find your mount points:
 lsblk -o NAME,SIZE,MOUNTPOINT,FSTYPE | grep -v loop
 ```
 
-Then pass them at install time:
-
-```bash
-curl -sSL .../install.sh | sudo EXTRA_DISKS="/mnt/d1,/mnt/d2" bash
-```
-
-Or add them later by editing `~/oled-stats/stats.py` and running `oled restart` — no reinstall needed:
-
-```python
-EXTRA_DISKS = ["/mnt/d1", "/mnt/d2"]
-```
-
-Sizes switch between G and T automatically (binary GiB/TiB).
-
 ## Customise at install time
 
-Pass environment variables before `bash`. All are optional.
+Pass environment variables before `bash`. All are optional — the interactive wizard handles drive setup if omitted.
 
 ```bash
 curl -sSL .../install.sh | sudo SHOW_TEMP=False OFF_TIME="23:00" ON_TIME="08:00" bash
 ```
 
-| Variable        | Default  | Description                                             |
-|-----------------|----------|---------------------------------------------------------|
-| `SHOW_TEMP`     | `True`   | Show CPU temp next to CPU% on line 2 (`True` or `False`) |
-| `EXTRA_DISKS`   | _(none)_ | Comma-separated mount points for extra drives           |
-| `OLED_I2C_ADDR` | `0x3C`   | I2C hex address (`0x3C` or `0x3D` depending on board)  |
-| `OLED_WIDTH`    | `128`    | Display width in pixels                                 |
-| `OLED_HEIGHT`   | `64`     | Display height in pixels                                |
-| `OFF_TIME`      | `22:00`  | Scheduled off time, 24h `HH:MM`                        |
-| `ON_TIME`       | `07:15`  | Scheduled on time, 24h `HH:MM`                         |
+To skip the wizard entirely and pre-configure drives:
+
+```bash
+curl -sSL .../install.sh | sudo \
+  EXTRA_DISKS="/mnt/nvme0,/mnt/nvme1" \
+  DISK_LABELS="NVMe0,NVMe1" \
+  DISK_UNIT="T" \
+  bash
+```
+
+| Variable        | Default   | Description                                                        |
+|-----------------|-----------|--------------------------------------------------------------------|
+| `SHOW_TEMP`     | `True`    | Show CPU temp next to CPU% on line 2 (`True` or `False`)          |
+| `EXTRA_DISKS`   | _(wizard)_| Comma-separated mount points for extra drives                      |
+| `DISK_LABELS`   | _(wizard)_| Comma-separated labels matching `EXTRA_DISKS` (max 8 chars each)  |
+| `DISK_UNIT`     | _(wizard)_| Disk size unit: `auto`, `G` (always GB), or `T` (always TB)       |
+| `OLED_I2C_ADDR` | `0x3C`    | I2C hex address (`0x3C` or `0x3D` depending on board)             |
+| `OLED_WIDTH`    | `128`     | Display width in pixels                                            |
+| `OLED_HEIGHT`   | `64`      | Display height in pixels                                           |
+| `OFF_TIME`      | `22:00`   | Scheduled off time, 24h `HH:MM`                                   |
+| `ON_TIME`       | `07:15`   | Scheduled on time, 24h `HH:MM`                                    |
 
 > Booleans must be capitalized: `True` / `False`.
+> `DISK_UNIT=auto` shows G below 1 TiB, T at or above.
 
 ## `oled` command
 
@@ -117,7 +148,9 @@ nano ~/oled-stats/stats.py
 oled restart
 ```
 
-Changes are live within seconds of restart. `EXTRA_DISKS`, `SHOW_TEMP`, and `DISK_CYCLE_SECS` are plain Python variables at the top of the file — easy to tweak without reinstalling.
+Changes are live within seconds of restart. `EXTRA_DISKS`, `DISK_LABELS`, `DISK_UNIT`, `SHOW_TEMP`, and `DISK_CYCLE_SECS` are plain Python variables at the top of the file — easy to tweak without reinstalling.
+
+**Disk label limit:** PIL's default font is 6px wide. At 128px display width, each line fits ~21 characters. With the `LABEL: ` prefix, keep labels to 8 characters or fewer to avoid truncation.
 
 ## Troubleshooting
 

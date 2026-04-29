@@ -13,13 +13,21 @@ DISPLAY_WIDTH  = __WIDTH__
 DISPLAY_HEIGHT = __HEIGHT__
 SHOW_TEMP      = __SHOW_TEMP__
 EXTRA_DISKS    = [d.strip() for d in "__EXTRA_DISKS__".split(',') if d.strip()]
+DISK_LABELS    = [l.strip() for l in "__DISK_LABELS__".split(',') if l.strip()]
+DISK_UNIT      = "__DISK_UNIT__"
+
+DISK_CYCLE_SECS = 5
 
 
 def run(cmd):
     return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
 
 
-def fmt_bytes(n):
+def fmt_bytes(n, unit=None):
+    if unit == "T":
+        return f"{n / (1 << 40):.1f}T"
+    if unit == "G":
+        return f"{n / (1 << 30):.1f}G"
     if n >= 1 << 40:
         return f"{n / (1 << 40):.1f}T"
     if n >= 1 << 30:
@@ -36,7 +44,6 @@ def get_ip():
 
 def get_cpu():
     try:
-        # $8 is the idle% field in procps-ng top on Bookworm
         return run("top -bn1 | grep '%Cpu' | awk '{printf \"%.1f\", 100 - $8}'")
     except Exception:
         return "?"
@@ -69,7 +76,8 @@ def get_disk(mount):
     try:
         out = run(f"df -B1 {mount} | awk 'NR==2{{print $3, $2}}'")
         used, total = map(int, out.split())
-        return f"{fmt_bytes(used)}/{fmt_bytes(total)}"
+        unit = None if DISK_UNIT == "auto" else DISK_UNIT
+        return f"{fmt_bytes(used, unit)}/{fmt_bytes(total, unit)}"
     except Exception:
         return "?"
 
@@ -78,9 +86,6 @@ def blank_and_exit(oled, *_):
     oled.fill(0)
     oled.show()
     sys.exit(0)
-
-
-DISK_CYCLE_SECS = 5
 
 
 def main():
@@ -94,8 +99,12 @@ def main():
     image = Image.new("1", (DISPLAY_WIDTH, DISPLAY_HEIGHT))
     draw  = ImageDraw.Draw(image)
 
-    all_disks = [("BOOT" if EXTRA_DISKS else "DSK", "/")] + \
-                [(f"D{i}", m) for i, m in enumerate(EXTRA_DISKS, 1)]
+    boot_label = "BOOT" if EXTRA_DISKS else "DSK"
+    if DISK_LABELS and len(DISK_LABELS) == len(EXTRA_DISKS):
+        extra = list(zip(DISK_LABELS, EXTRA_DISKS))
+    else:
+        extra = [(f"D{i}", m) for i, m in enumerate(EXTRA_DISKS, 1)]
+    all_disks = [(boot_label, "/")] + extra
 
     iteration = 0
     while True:
