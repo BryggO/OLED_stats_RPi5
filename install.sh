@@ -150,7 +150,7 @@ chown "$REAL_USER:$REAL_USER" "$INSTALL_DIR/config.json"
 # 9. cron helper (root-owned, called via sudo)
 cat > /usr/local/sbin/oled-set-cron << 'CRONEOF'
 #!/bin/bash
-OFF="${1}" ON="${2}"
+OFF="$(printf '%04d' "${1}")" ON="$(printf '%04d' "${2}")"
 printf '%s %s * * *  root  /usr/bin/systemctl stop oled-stats\n'  "${OFF:2:2}" "${OFF:0:2}" >  /etc/cron.d/oled-stats
 printf '%s %s * * *  root  /usr/bin/systemctl start oled-stats\n' "${ON:2:2}"  "${ON:0:2}"  >> /etc/cron.d/oled-stats
 CRONEOF

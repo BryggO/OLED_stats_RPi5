@@ -1,4 +1,33 @@
 #!/bin/bash
+CONFIG="__CONFIG_FILE__"
+
+cfg_set() {
+    python3 -c "
+import json, sys
+key, val = sys.argv[1], sys.argv[2]
+try: val = int(val)
+except: pass
+try:
+    cfg = json.load(open('$CONFIG'))
+except:
+    cfg = {}
+cfg[key] = val
+json.dump(cfg, open('$CONFIG', 'w'), indent=2)
+" "$1" "$2"
+}
+
+cfg_get() {
+    python3 -c "
+import json, sys
+key, dflt = sys.argv[1], sys.argv[2]
+try:
+    cfg = json.load(open('$CONFIG'))
+    print(cfg.get(key, dflt))
+except:
+    print(dflt)
+" "$1" "$2"
+}
+
 ACTION="${1:-toggle}"
 
 case "$ACTION" in
@@ -25,8 +54,98 @@ case "$ACTION" in
       sudo systemctl start oled-stats
     fi
     ;;
+  updater)
+    val="${2:-}"
+    if [[ ! "$val" =~ ^[0-9]+$ ]] || (( val < 1 || val > 60 )); then
+      echo "Usage: oled updater <1-60>"; exit 1
+    fi
+    cfg_set refresh_secs "$val"
+    sudo systemctl restart oled-stats
+    echo "Update rate set to ${val}s"
+    ;;
+  disk)
+    sub="${2:-}"
+    case "$sub" in
+      rotate)
+        cfg_set disk_mode rotate
+        sudo systemctl restart oled-stats
+        echo "Disk: auto-rotate"
+        ;;
+      stable)
+        cfg_set disk_mode manual
+        cfg_set disk_index 0
+        sudo systemctl restart oled-stats
+        echo "Disk: locked to root"
+        ;;
+      speed)
+        val="${3:-}"
+        if [[ ! "$val" =~ ^[0-9]+$ ]] || (( val < 1 || val > 120 )); then
+          echo "Usage: oled disk speed <1-120>"; exit 1
+        fi
+        cfg_set disk_speed "$val"
+        sudo systemctl restart oled-stats
+        echo "Disk rotation speed set to ${val}s"
+        ;;
+      ''|*[!0-9]*)
+        echo "Usage: oled disk [stable|rotate|speed <n>|<0-N>]"; exit 1
+        ;;
+      *)
+        cfg_set disk_mode manual
+        cfg_set disk_index "$sub"
+        sudo systemctl restart oled-stats
+        echo "Disk: locked to disk $sub"
+        ;;
+    esac
+    ;;
+  sleep)
+    val="${2:-}"
+    if [[ ! "$val" =~ ^[0-2][0-9][0-5][0-9]$ ]]; then
+      echo "Usage: oled sleep <HHMM>  (e.g. 2200)"; exit 1
+    fi
+    cfg_set sleep_time "$val"
+    on="$(cfg_get awake_time 0715)"
+    sudo /usr/local/sbin/oled-set-cron "$val" "$on"
+    echo "Sleep set to ${val:0:2}:${val:2:2}"
+    ;;
+  awake)
+    val="${2:-}"
+    if [[ ! "$val" =~ ^[0-2][0-9][0-5][0-9]$ ]]; then
+      echo "Usage: oled awake <HHMM>  (e.g. 0600)"; exit 1
+    fi
+    cfg_set awake_time "$val"
+    off="$(cfg_get sleep_time 2200)"
+    sudo /usr/local/sbin/oled-set-cron "$off" "$val"
+    echo "Wake set to ${val:0:2}:${val:2:2}"
+    ;;
+  help)
+    echo "oled — OLED stats display control"
+    echo ""
+    echo "Power:"
+    echo "  oled                    Toggle display on/off"
+    echo "  oled on                 Start the display"
+    echo "  oled off                Stop the display (blanks screen)"
+    echo "  oled restart            Restart the service"
+    echo "  oled status             Show whether display is on or off"
+    echo ""
+    echo "Refresh rate:"
+    echo "  oled updater <1-60>     Set how often the display updates (seconds)"
+    echo ""
+    echo "Disk display:"
+    echo "  oled disk rotate        Auto-cycle through all disks (default)"
+    echo "  oled disk stable        Lock to root disk only"
+    echo "  oled disk <0-N>         Lock to a specific disk (0 = root)"
+    echo "  oled disk speed <1-120> Set how long each disk is shown (seconds)"
+    echo ""
+    echo "Schedule:"
+    echo "  oled sleep <HHMM>       Set auto-off time  (e.g. oled sleep 2200)"
+    echo "  oled awake <HHMM>       Set auto-on time   (e.g. oled awake 0715)"
+    ;;
   *)
-    echo "Usage: oled [on|off|restart|status]"
+    echo "Usage: oled [on|off|restart|status|toggle|help]"
+    echo "       oled updater <1-60>"
+    echo "       oled disk [stable|rotate|speed <1-120>|<0-N>]"
+    echo "       oled sleep <HHMM>"
+    echo "       oled awake <HHMM>"
     exit 1
     ;;
 esac
