@@ -1,0 +1,31 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main, 'ci/**']
+
+jobs:
+  lint:
+    runs-on: docker
+    container:
+      image: python:3.12.16-bookworm@sha256:4209fae09a3e20afd863e528bfddc235da5fd5977983e1996cd54cc9a72e6267
+    steps:
+      - run: apt-get update -qq && apt-get install -y -qq nodejs >/dev/null # for the checkout action
+      - uses: https://code.forgejo.org/actions/checkout@v4
+      - name: render stats.py template (sample values, like install.sh)
+        run: |
+          sed -e 's|__ADDR__|0x3C|g' -e 's|__WIDTH__|128|g' -e 's|__HEIGHT__|32|g' \
+              -e 's|__SHOW_TEMP__|True|g' -e 's|__EXTRA_DISKS__||g' -e 's|__DISK_LABELS__||g' \
+              -e 's|__DISK_UNIT__|GB|g' stats.py > /tmp/stats.py
+          if grep -o '__[A-Z_]*__' /tmp/stats.py; then
+            echo "unfilled placeholder(s) above: add them to install.sh and this workflow"; exit 1
+          fi
+      - name: syntax
+        run: |
+          python -m py_compile /tmp/stats.py
+          bash -n install.sh
+          bash -n oled
+      - name: ruff (syntax errors + undefined names only)
+        run: |
+          python -m venv /tmp/v && /tmp/v/bin/pip install -q --disable-pip-version-check ruff
+          /tmp/v/bin/ruff check --no-cache --select E9,F /tmp/stats.py
