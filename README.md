@@ -233,3 +233,10 @@ If `i2cdetect` shows `3d` instead of `3c`, edit `~/oled-stats/stats.py`, change 
 | `/etc/systemd/system/oled-stats.service` | Auto-start on boot |
 | `/etc/sudoers.d/oled-stats` | Passwordless `oled` commands |
 | `/etc/cron.d/oled-stats` | Scheduled on/off |
+
+## CI
+
+Every push and PR runs `.forgejo/workflows/ci.yml` on the homelab runner: it renders
+`stats.py` with sample values (as `install.sh` does), fails on any unfilled
+`__PLACEHOLDER__`, then checks syntax (`py_compile`, `bash -n`) and `ruff --select E9,F`.
+`main` requires `ci / lint (pull_request)` to pass before a PR can merge.
