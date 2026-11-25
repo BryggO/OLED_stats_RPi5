@@ -8,7 +8,7 @@ jobs:
   lint:
     runs-on: docker
     container:
-      image: python:3.15.2-bookworm@sha256:2902828c27495070a7de85afed2975a64365f8f700e31c2df4e5adb04c5be309
+      image: python:3.15.2-bookworm@sha256:2bf848386eab766326ae3fc2f061788ae858d7945aefce74967d4a861ebdad12
     steps:
       - run: apt-get update -qq && apt-get install -y -qq nodejs >/dev/null # for the checkout action
       - uses: https://code.forgejo.org/actions/checkout@v4
